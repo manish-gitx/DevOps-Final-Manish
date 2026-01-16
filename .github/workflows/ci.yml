@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+env:
+  JAVA_VERSION: '17'
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/devops-ci-api
+
+jobs:
+  build-test-secure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        # Ensure we scan the exact code being built
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+        # Install JDK with Maven cache to speed up and ensure repeatability
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: java
+        # SAST initialization so findings land in the Security tab
+
+      - name: Lint with Checkstyle
+        run: mvn -B checkstyle:check
+        # Enforce coding standards early to fail fast
+
+      - name: Dependency vulnerability scan (SCA)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1'
+          ignore-unfixed: true
+        # SCA using Trivy filesystem scan; blocks on HIGH/CRITICAL dependency vulnerabilities
+
+      - name: Run unit tests
+        run: mvn -B test
+        # Validate business logic and prevent regressions
+
+      - name: Package application
+        run: mvn -B -DskipTests package
+        # Build the JAR (also serves as the CodeQL build step)
+
+      - name: Analyze with CodeQL
+        uses: github/codeql-action/analyze@v3
+        # Upload SAST results and fail on unresolved security issues
+
+      - name: Build Docker image
+        run: |
+          docker build --pull -t ${{ env.IMAGE_NAME }}:${{ github.sha }} .
+          docker tag ${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.IMAGE_NAME }}:latest
+        # Create versioned and rolling tags for reproducibility and promotion
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: table
+          vuln-type: 'os,library'
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+          exit-code: '1'
+        # Block pipeline when high/critical vulnerabilities exist in the container image
+
+      - name: Container smoke test
+        run: |
+          docker run -d -p 8080:8080 --name app-under-test ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          for _ in {1..12}; do
+            if curl -fsS http://localhost:8080/users > /tmp/response.json; then
+              cat /tmp/response.json
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Application did not become healthy in time" >&2
+          exit 1
+        # Validate runtime behavior before publishing
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        # Use GitHub secrets to avoid hardcoding credentials
+
+      - name: Push image to Docker Hub
+        run: |
+          docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.IMAGE_NAME }}:latest
+        # Publish only after security and runtime gates pass
+
+      - name: Cleanup container
+        if: always()
+        run: docker rm -f app-under-test || true
+        # Ensure runner is clean for subsequent jobs
