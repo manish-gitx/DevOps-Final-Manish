@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devops-ci-api-config
+  namespace: devops-app
+  labels:
+    app: devops-ci-api
+data:
+  application.properties: |
+    server.port=8080
+    spring.application.name=devops-ci-api
+    logging.level.root=INFO
+    logging.level.com.example.devops=DEBUG
