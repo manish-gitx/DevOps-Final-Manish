@@ -96,6 +96,16 @@ jobs:
       with:
         version: ${{ env.KUBECTL_VERSION }}
     
+    - name: Set up Google Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        version: 'latest'
+    
+    - name: Install GKE Auth Plugin
+      run: |
+        gcloud components install gke-gcloud-auth-plugin --quiet
+        echo "USE_GKE_GCLOUD_AUTH_PLUGIN=True" >> $GITHUB_ENV
+    
     - name: Configure Kubernetes context
       run: |
         mkdir -p $HOME/.kube
@@ -182,6 +192,16 @@ jobs:
       with:
         version: ${{ env.KUBECTL_VERSION }}
     
+    - name: Set up Google Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        version: 'latest'
+    
+    - name: Install GKE Auth Plugin
+      run: |
+        gcloud components install gke-gcloud-auth-plugin --quiet
+        echo "USE_GKE_GCLOUD_AUTH_PLUGIN=True" >> $GITHUB_ENV
+    
     - name: Configure Kubernetes context
       run: |
         mkdir -p $HOME/.kube
@@ -237,6 +257,16 @@ jobs:
       uses: azure/setup-kubectl@v4
       with:
         version: ${{ env.KUBECTL_VERSION }}
+    
+    - name: Set up Google Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        version: 'latest'
+    
+    - name: Install GKE Auth Plugin
+      run: |
+        gcloud components install gke-gcloud-auth-plugin --quiet
+        echo "USE_GKE_GCLOUD_AUTH_PLUGIN=True" >> $GITHUB_ENV
     
     - name: Configure Kubernetes context
       run: |
