@@ -1,25 +1,6 @@
 # Advanced DevSecOps CI/CD Pipeline
 
-A production-grade DevSecOps project demonstrating a complete CI/CD pipeline with security scanning, quality gates, containerization, and Kubernetes deployment.
-
-## 📋 Project Overview
-
-This project implements a **security-first CI/CD pipeline** for a Java Spring Boot REST API that:
-- Exposes a `/users` endpoint returning sample user data
-- Enforces code quality standards with Checkstyle
-- Performs Static Application Security Testing (SAST) with CodeQL
-- Scans dependencies for vulnerabilities (SCA) with Trivy
-- Builds secure Docker images with security scanning
-- Deploys to local Kubernetes with production-ready configurations
-
-**Key Technologies:**
-- **Language**: Java 17
-- **Framework**: Spring Boot 3.4.5
-- **Build Tool**: Maven
-- **CI Platform**: GitHub Actions
-- **Container**: Docker (multi-stage builds)
-- **Orchestration**: Kubernetes (minikube/kind)
-- **Security Tools**: CodeQL, Trivy, Checkstyle
+A production-grade DevSecOps project demonstrating a complete CI/CD pipeline with security scanning, quality gates, containerization, and Kubernetes deployment for a Java Spring Boot REST API.
 
 ---
 
@@ -44,7 +25,7 @@ mvn spring-boot:run
 curl http://localhost:8080/users
 ```
 
-**Run Tests:**
+**Run Tests & Quality Checks:**
 ```bash
 # Run unit tests
 mvn test
@@ -147,6 +128,7 @@ To run the complete CI/CD pipeline, you need to configure secrets for both Docke
 | `KUBE_CONFIG_DEV` | Base64 encoded kubeconfig for dev cluster | Development deployment |
 | `KUBE_CONFIG_STAGING` | Base64 encoded kubeconfig for staging cluster | Staging deployment |
 | `KUBE_CONFIG_PROD` | Base64 encoded kubeconfig for production cluster | Production deployment |
+| `GCP_SA_KEY` | Google Cloud service account key (JSON) | GKE cluster authentication |
 
 ### How to Create Docker Hub Access Token
 
@@ -169,28 +151,7 @@ cat ~/.kube/config | base64
 kubectl config view --minify --flatten | base64
 ```
 
-**For cloud providers (AWS EKS, GCP GKE, Azure AKS):**
-
-Choose your provider and follow the instructions:
-
-<details>
-<summary><b>AWS EKS</b></summary>
-
-```bash
-# Install AWS CLI and configure
-aws configure
-
-# Update kubeconfig for EKS
-aws eks update-kubeconfig --name your-cluster-name --region us-east-1
-
-# Export and encode
-kubectl config view --minify --flatten | base64 | tr -d '\n'
-```
-</details>
-
-<details>
-<summary><b>GCP GKE</b></summary>
-
+**For Google Cloud GKE:**
 ```bash
 # Install gcloud CLI and authenticate
 gcloud auth login
@@ -201,37 +162,10 @@ gcloud container clusters get-credentials your-cluster-name --region us-central1
 # Export and encode
 kubectl config view --minify --flatten | base64 | tr -d '\n'
 ```
-</details>
-
-<details>
-<summary><b>Azure AKS</b></summary>
-
-```bash
-# Install Azure CLI and login
-az login
-
-# Get cluster credentials
-az aks get-credentials --resource-group your-rg --name your-cluster-name
-
-# Export and encode
-kubectl config view --minify --flatten | base64 | tr -d '\n'
-```
-</details>
 
 **Then add to GitHub Secrets:**
 - Copy the base64 encoded kubeconfig
 - Add as `KUBE_CONFIG_DEV`, `KUBE_CONFIG_STAGING`, or `KUBE_CONFIG_PROD`
-
-### Setting Up GitHub Environments (Optional but Recommended)
-
-For deployment approvals and protection rules:
-
-1. Go to: Settings → Environments
-2. Create three environments:
-   - `development` (no approval required)
-   - `staging` (require 1 reviewer)
-   - `production` (require 2 reviewers)
-3. Add environment-specific secrets if needed
 
 ### Verifying Configuration
 
@@ -255,105 +189,82 @@ Check the workflow logs to ensure:
 
 ---
 
-## 🔄 CI/CD Pipeline Explanation
-
-This project includes **complete CI/CD pipelines** with automated deployment to Kubernetes.
-
-### Available Workflows
-
-1. **CI Pipeline** (`.github/workflows/ci.yml`) - Automated on every push
-2. **CD Pipeline** (`.github/workflows/cd.yml`) - Deploy to Development/Staging/Production
-3. **Rollback** (`.github/workflows/rollback.yml`) - Emergency rollback capability
+## 🔄 CI Pipeline Explanation
 
 ### CI Pipeline Architecture
 
+The CI pipeline is triggered automatically on every push to `main` or `develop` branches and runs through 7 stages:
+
 ```
-Developer → Git Push → GitHub Actions
+Developer Push → GitHub Actions
     ↓
-Stage 1: Setup & Initialize (30-60s)
+Stage 1: Setup & Code Quality (30-60s)
     - Checkout code
     - Setup Java 17 + Maven cache
+    - Run Checkstyle linting
+    - Run unit tests
+    ↓
+Stage 2: Security Scanning - SCA (60-90s)
+    - Trivy dependency scan
+    - Check for HIGH/CRITICAL vulnerabilities
+    - Upload results to GitHub Security
+    ↓
+Stage 3: SAST - CodeQL Analysis (2-5 min)
     - Initialize CodeQL
+    - Build application
+    - Analyze for security vulnerabilities
     ↓
-Stage 2: Shift-Left Security Gates (60-90s) ⚠️ FAIL FAST
-    - Checkstyle Lint → Code quality
-    - Trivy SCA → Dependency vulnerabilities
-    - Unit Tests → Business logic
-    ↓
-Stage 3: Build & SAST (2-5 min)
+Stage 4: Build & Package (1-2 min)
     - Maven build JAR
-    - CodeQL analysis (SQL injection, XSS, etc.)
+    - Upload artifact
     ↓
-Stage 4: Container Build & Scan (2-4 min)
+Stage 5: Docker Build & Scan (2-4 min)
     - Multi-stage Docker build
-    - Trivy image scan
+    - Trivy image vulnerability scan
+    - Save Docker image as artifact
     ↓
-Stage 5: Runtime Validation (30-60s)
+Stage 6: Runtime Validation (30-60s)
     - Start container
     - Test /users endpoint
     - Validate response
     ↓
-Stage 6: Publish to Registry (30-90s)
+Stage 7: Publish to Registry (30-90s)
     - Push to Docker Hub (SHA + latest tags)
+    - Create deployment metadata
     ↓
-Stage 7: Auto-Deploy to Development
-    - Triggers CD pipeline automatically
-    ↓
-Docker Hub Registry + Kubernetes Deployment
-```
-
-### CD Pipeline Architecture
-
-```
-CI Success → CD Pipeline Triggered
-    ↓
-Environment Selection
-    - Development (auto-deploy)
-    - Staging (manual approval)
-    - Production (manual approval)
-    ↓
-Deploy to Kubernetes
-    - Create/update namespace
-    - Apply ConfigMaps
-    - Deploy application
-    - Apply services
-    - Apply network policies
-    ↓
-Health Checks
-    - Wait for rollout
-    - Verify pods running
-    - Test endpoints
-    ↓
-Deployment Complete
+✅ CI Complete → Triggers CD Pipeline
 ```
 
 ### Pipeline Stages Breakdown
 
 | Stage | Duration | Actions | Fails On |
 |-------|----------|---------|----------|
-| **Setup** | 30-60s | Checkout, Java setup, CodeQL init | - |
-| **Security Gates** | 60-90s | Checkstyle, Trivy SCA, Unit tests | Style violations, HIGH/CRITICAL CVEs, Test failures |
-| **Build & SAST** | 2-5 min | Maven package, CodeQL analysis | Build errors, Security vulnerabilities |
-| **Container** | 2-4 min | Docker build, Trivy image scan | HIGH/CRITICAL in image |
-| **Validation** | 30-60s | Smoke test /users endpoint | Runtime errors, timeout |
+| **Setup & Quality** | 30-60s | Checkstyle, Unit tests | Style violations, Test failures |
+| **Security SCA** | 60-90s | Trivy dependency scan | HIGH/CRITICAL CVEs |
+| **SAST** | 2-5 min | CodeQL analysis | Security vulnerabilities |
+| **Build** | 1-2 min | Maven package | Build errors |
+| **Container Scan** | 2-4 min | Docker build, Trivy scan | HIGH/CRITICAL in image |
+| **Validation** | 30-60s | Smoke test endpoint | Runtime errors, timeout |
 | **Publish** | 30-90s | Push to Docker Hub | Auth failure |
 | **Total** | **~9.5 min** | End-to-end pipeline | - |
 
 ### Key Security Features
 
-**Shift-Left Security**: Security checks run BEFORE building artifacts
-- Catches issues early (cheaper to fix)
+**Shift-Left Security**: Security checks run EARLY in the pipeline
+- Catches issues before building artifacts (cheaper to fix)
 - Prevents vulnerable code from progressing
 - Fail-fast strategy saves time
 
 **Defense in Depth**: Multiple overlapping security layers
-- **CodeQL SAST**: Finds code-level vulnerabilities
-- **Trivy SCA**: Scans dependencies for CVEs
+- **Checkstyle**: Code quality and style enforcement
+- **CodeQL SAST**: Finds code-level vulnerabilities (SQL injection, XSS, etc.)
+- **Trivy SCA**: Scans dependencies for known CVEs
 - **Trivy Image**: Scans final container image
 - **Smoke Test**: Validates runtime behavior
 
 **Zero Trust to Registry**: Only images that pass ALL gates are published
 - ✅ Code quality (Checkstyle)
+- ✅ Unit tests pass
 - ✅ Dependency scan (SCA)
 - ✅ Code scan (SAST)
 - ✅ Image scan
@@ -367,45 +278,75 @@ Deployment Complete
 - No build tools in runtime image
 - Non-root user execution (UID 1000)
 - Alpine base for minimal attack surface
+- Automated security patching with `apk upgrade`
 
 ---
 
-## 📁 Project Structure
+## 🚢 CD Pipeline Explanation
+
+### CD Pipeline Architecture
+
+The CD pipeline deploys the application to Kubernetes across three environments with progressive delivery:
 
 ```
-dev-Secops/
-├── .github/
-│   └── workflows/
-│       ├── ci.yml              # CI pipeline (auto on push)
-│       ├── cd.yml              # CD pipeline (deploy to K8s)
-│       └── rollback.yml        # Rollback workflow
-├── src/                        # Java Spring Boot source code
-│   ├── main/java/              # Application code
-│   └── test/java/              # Unit tests
-├── k8s/                        # Kubernetes manifests
-│   ├── namespace.yaml          # Namespace definition
-│   ├── configmap.yaml          # Configuration
-│   ├── deployment.yaml         # Deployment spec
-│   ├── service.yaml            # Service definition
-│   └── networkpolicy.yaml      # Network policies
-├── Dockerfile                  # Multi-stage container build
-├── pom.xml                     # Maven dependencies
-├── checkstyle.xml              # Code style rules
-└── README.md                   # This file
+CI Success → CD Pipeline Triggered
+    ↓
+Stage 1: Prepare Deployment
+    - Determine environment (dev/staging/prod)
+    - Set image tag (latest or specific SHA)
+    - Set namespace based on environment
+    ↓
+Stage 2: Environment Selection & Approval
+    - Development: Auto-deploy (no approval)
+    - Staging: Manual trigger + approval required
+    - Production: Manual trigger + approval required
+    ↓
+Stage 3: Kubernetes Configuration
+    - Install kubectl
+    - Setup Google Cloud SDK + GKE auth plugin
+    - Authenticate to GCP
+    - Configure kubeconfig from secrets
+    - Verify cluster connection
+    ↓
+Stage 4: Deploy to Kubernetes
+    - Create/update namespace
+    - Apply ConfigMaps (environment variables)
+    - Deploy application (update image)
+    - Apply services (LoadBalancer/NodePort)
+    - Apply network policies (if exists)
+    ↓
+Stage 5: Health Checks & Validation
+    - Wait for rollout completion (5-10 min timeout)
+    - Verify pods are running
+    - Run health checks on /users endpoint
+    - Get service URL
+    ↓
+Stage 6: Deployment Summary
+    - Display deployment status
+    - Show environment, namespace, image
+    - Provide service URL
+    ↓
+✅ CD Complete → Application Live
 ```
 
----
+### Deployment Environments
 
-## 🚢 CD Workflows
+| Environment | Auto-Deploy | Requires Approval | Replicas | Namespace |
+|-------------|-------------|-------------------|----------|-----------|
+| Development | ✅ Yes (on main push) | ❌ No | 2 | devops-app-dev |
+| Staging | ❌ Manual | ✅ Yes (1 reviewer) | 2 | devops-app-staging |
+| Production | ❌ Manual | ✅ Yes (2 reviewers) | 3 | devops-app-prod |
 
-### 1. Automated Deployment (Development)
+### CD Workflows
+
+**1. Automated Deployment (Development)**
 ```bash
 # Automatically triggered on successful CI build from main branch
 git push origin main
 # → CI runs → Image published → Auto-deploys to dev
 ```
 
-### 2. Manual Deployment (Staging/Production)
+**2. Manual Deployment (Staging/Production)**
 ```bash
 # Via GitHub UI:
 # 1. Go to Actions → "CD - Deploy to Kubernetes"
@@ -416,7 +357,7 @@ git push origin main
 # 6. Approve deployment (for staging/production)
 ```
 
-### 3. Rollback
+**3. Rollback**
 ```bash
 # Via GitHub UI:
 # 1. Go to Actions → "Rollback Deployment"
@@ -426,29 +367,36 @@ git push origin main
 # 5. Click "Run workflow"
 ```
 
-### Deployment Environments
+### Key CD Features
 
-| Environment | Auto-Deploy | Requires Approval | Replicas | Namespace |
-|-------------|-------------|-------------------|----------|-----------|
-| Development | ✅ Yes | ❌ No | 2 | devops-app-dev |
-| Staging | ❌ No | ✅ Yes (1 reviewer) | 2 | devops-app-staging |
-| Production | ❌ No | ✅ Yes (2 reviewers) | 3 | devops-app-prod |
+**Progressive Delivery**
+- Development → Staging → Production flow
+- Approval gates for production environments
+- Different replica counts per environment
 
----
+**Infrastructure as Code**
+- All Kubernetes manifests version-controlled
+- Declarative configuration with kubectl apply
+- Idempotent deployments
 
-## 🎯 DevSecOps Principles Implemented
+**Health Checks & Validation**
+- Automatic rollout status monitoring
+- Pod health verification
+- Endpoint testing before completion
+- Timeout protection (5-10 min)
 
-1. **Shift-Left Security** - Security testing early in the pipeline
-2. **Automation** - Zero manual steps, fully automated CI/CD
-3. **Continuous Integration** - Every commit triggers full pipeline
-4. **Continuous Deployment** - Automated deployment to Kubernetes
-5. **Infrastructure as Code** - Version-controlled manifests
-6. **Immutable Artifacts** - Git SHA tagged images
-7. **Defense in Depth** - Multiple security layers
-8. **Fail-Fast** - Stop immediately on critical failures
-9. **Least Privilege** - Non-root containers, minimal permissions
-10. **Progressive Delivery** - Dev → Staging → Production with approvals
-11. **Rollback Strategy** - One-click rollback capability
+**Production Safeguards**
+- Pre-deployment verification (image exists)
+- Final security scan before deployment
+- Backup of current deployment
+- Comprehensive health checks (5 iterations)
+- Extended rollout timeout (10 min)
+
+**Cloud-Native Deployment**
+- Google Cloud GKE integration
+- Service account authentication
+- Cross-platform gke-gcloud-auth-plugin support
+- LoadBalancer service type for external access
 
 ---
 
@@ -458,6 +406,7 @@ git push origin main
 - **CodeQL**: https://codeql.github.com/docs/
 - **Trivy**: https://aquasecurity.github.io/trivy/
 - **Spring Boot**: https://spring.io/projects/spring-boot
+- **Kubernetes**: https://kubernetes.io/docs/home/
 - **OWASP Top 10**: https://owasp.org/www-project-top-ten/
 
 ---
