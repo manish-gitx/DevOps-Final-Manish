@@ -266,7 +266,14 @@ jobs:
         name: docker-image
     
     - name: Load Docker image
-      run: docker load < docker-image.tar.gz
+      run: |
+        docker load < docker-image.tar.gz
+        docker images
+    
+    - name: Tag image as latest
+      run: |
+        docker tag ${{ env.DOCKER_IMAGE }}:${{ github.sha }} ${{ env.DOCKER_IMAGE }}:latest
+        docker images
     
     - name: Log in to Docker Hub
       uses: docker/login-action@v3
