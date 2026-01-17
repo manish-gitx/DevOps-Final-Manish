@@ -1,0 +1,121 @@
+name: Rollback Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to rollback'
+        required: true
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+      revision:
+        description: 'Revision number to rollback to (0 = previous, 1 = before that, etc.)'
+        required: false
+        default: '0'
+
+env:
+  KUBECTL_VERSION: 'v1.28.0'
+
+jobs:
+  rollback:
+    name: Rollback to Previous Version
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event.inputs.environment }}
+    
+    steps:
+    - name: Set namespace
+      id: set-namespace
+      run: |
+        case ${{ github.event.inputs.environment }} in
+          development)
+            echo "namespace=devops-app-dev" >> $GITHUB_OUTPUT
+            echo "kubeconfig_secret=KUBE_CONFIG_DEV" >> $GITHUB_OUTPUT
+            ;;
+          staging)
+            echo "namespace=devops-app-staging" >> $GITHUB_OUTPUT
+            echo "kubeconfig_secret=KUBE_CONFIG_STAGING" >> $GITHUB_OUTPUT
+            ;;
+          production)
+            echo "namespace=devops-app-prod" >> $GITHUB_OUTPUT
+            echo "kubeconfig_secret=KUBE_CONFIG_PROD" >> $GITHUB_OUTPUT
+            ;;
+        esac
+    
+    - name: Install kubectl
+      uses: azure/setup-kubectl@v4
+      with:
+        version: ${{ env.KUBECTL_VERSION }}
+    
+    - name: Configure Kubernetes context
+      run: |
+        mkdir -p $HOME/.kube
+        SECRET_NAME="${{ steps.set-namespace.outputs.kubeconfig_secret }}"
+        echo "${{ secrets[env.SECRET_NAME] }}" | base64 -d > $HOME/.kube/config
+        chmod 600 $HOME/.kube/config
+      env:
+        SECRET_NAME: ${{ steps.set-namespace.outputs.kubeconfig_secret }}
+    
+    - name: Get current deployment info
+      run: |
+        echo "📊 Current Deployment Status:"
+        kubectl get deployment devops-ci-api -n ${{ steps.set-namespace.outputs.namespace }}
+        kubectl describe deployment devops-ci-api -n ${{ steps.set-namespace.outputs.namespace }}
+        
+        echo ""
+        echo "📜 Rollout History:"
+        kubectl rollout history deployment/devops-ci-api -n ${{ steps.set-namespace.outputs.namespace }}
+    
+    - name: Confirm rollback
+      run: |
+        echo "⚠️ Rolling back deployment in ${{ github.event.inputs.environment }}"
+        echo "Namespace: ${{ steps.set-namespace.outputs.namespace }}"
+        echo "Revision: ${{ github.event.inputs.revision }}"
+    
+    - name: Execute rollback
+      run: |
+        if [ "${{ github.event.inputs.revision }}" == "0" ]; then
+          kubectl rollout undo deployment/devops-ci-api -n ${{ steps.set-namespace.outputs.namespace }}
+        else
+          REVISION=$(kubectl rollout history deployment/devops-ci-api -n ${{ steps.set-namespace.outputs.namespace }} | tail -n +3 | head -n -${{ github.event.inputs.revision }} | tail -1 | awk '{print $1}')
+          kubectl rollout undo deployment/devops-ci-api -n ${{ steps.set-namespace.outputs.namespace }} --to-revision=$REVISION
+        fi
+    
+    - name: Wait for rollback to complete
+      run: |
+        kubectl rollout status deployment/devops-ci-api -n ${{ steps.set-namespace.outputs.namespace }} --timeout=5m
+    
+    - name: Verify rollback
+      run: |
+        echo "✅ Rollback completed!"
+        echo ""
+        echo "📊 New Deployment Status:"
+        kubectl get all -n ${{ steps.set-namespace.outputs.namespace }}
+        
+        echo ""
+        echo "🏥 Running health check..."
+        POD_NAME=$(kubectl get pod -l app=devops-ci-api -n ${{ steps.set-namespace.outputs.namespace }} -o jsonpath="{.items[0].metadata.name}")
+        kubectl exec -n ${{ steps.set-namespace.outputs.namespace }} $POD_NAME -- wget -qO- http://localhost:8080/users
+        
+        echo ""
+        echo "✅ Health check passed!"
+    
+    - name: Create rollback summary
+      if: always()
+      run: |
+        echo "## 🔄 Rollback Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Environment:** ${{ github.event.inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Namespace:** ${{ steps.set-namespace.outputs.namespace }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Status" >> $GITHUB_STEP_SUMMARY
+        
+        if [ $? -eq 0 ]; then
+          echo "✅ Rollback completed successfully!" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ Rollback failed! Manual intervention required." >> $GITHUB_STEP_SUMMARY
+        fi

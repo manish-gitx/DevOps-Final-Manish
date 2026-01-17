@@ -1,114 +1,321 @@
-name: CI
+name: CI - Build, Test & Security Scan
 
 on:
   push:
+    branches: [ main, develop ]
+  pull_request:
     branches: [ main ]
   workflow_dispatch:
 
-permissions:
-  contents: read
-  security-events: write
-  actions: read
-
 env:
+  DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/devops-ci-api
   JAVA_VERSION: '17'
-  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/devops-ci-api
 
 jobs:
-  build-test-secure:
+  # ============================================
+  # Stage 1: Setup & Initialize
+  # ============================================
+  setup:
+    name: Setup & Code Quality
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-        # Ensure we scan the exact code being built
-
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
-          cache: maven
-        # Install JDK with Maven cache to speed up and ensure repeatability
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: java
-        # SAST initialization so findings land in the Security tab
-
-      - name: Lint with Checkstyle
-        run: mvn -B checkstyle:check
-        # Enforce coding standards early to fail fast
-
-      - name: Dependency vulnerability scan (SCA)
-        uses: aquasecurity/trivy-action@0.24.0
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'table'
-          severity: 'HIGH,CRITICAL'
-          exit-code: '1'
-          ignore-unfixed: true
-        # SCA using Trivy filesystem scan; blocks on HIGH/CRITICAL dependency vulnerabilities
-
-      - name: Run unit tests
-        run: mvn -B test
-        # Validate business logic and prevent regressions
-
-      - name: Package application
-        run: mvn -B -DskipTests package
-        # Build the JAR (also serves as the CodeQL build step)
-
-      - name: Analyze with CodeQL
-        uses: github/codeql-action/analyze@v3
-        # Upload SAST results and fail on unresolved security issues
-
-      - name: Build Docker image
-        run: |
-          docker build --pull -t ${{ env.IMAGE_NAME }}:${{ github.sha }} .
-          docker tag ${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.IMAGE_NAME }}:latest
-        # Create versioned and rolling tags for reproducibility and promotion
-
-      - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@0.24.0
-        with:
-          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
-          format: table
-          vuln-type: 'os,library'
-          severity: 'HIGH,CRITICAL'
-          ignore-unfixed: true
-          exit-code: '1'
-        # Block pipeline when high/critical vulnerabilities exist in the container image
-
-      - name: Container smoke test
-        run: |
-          docker run -d -p 8080:8080 --name app-under-test ${{ env.IMAGE_NAME }}:${{ github.sha }}
-          for _ in {1..12}; do
-            if curl -fsS http://localhost:8080/users > /tmp/response.json; then
-              cat /tmp/response.json
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "Application did not become healthy in time" >&2
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+        cache: 'maven'
+    
+    - name: Cache Maven packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.m2
+        key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+        restore-keys: ${{ runner.os }}-m2
+    
+    - name: Run Checkstyle
+      run: mvn checkstyle:check
+    
+    - name: Run Unit Tests
+      run: mvn test
+    
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results
+        path: target/surefire-reports/
+  
+  # ============================================
+  # Stage 2: Security Scanning - SCA
+  # ============================================
+  security-sca:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    needs: setup
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Run Trivy vulnerability scanner (SCA)
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-sca-results.sarif'
+        severity: 'CRITICAL,HIGH'
+        exit-code: '1'
+    
+    - name: Upload Trivy SCA results to GitHub Security
+      if: always()
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: 'trivy-sca-results.sarif'
+        category: 'trivy-sca'
+  
+  # ============================================
+  # Stage 3: SAST - Static Application Security Testing
+  # ============================================
+  security-sast:
+    name: CodeQL Analysis (SAST)
+    runs-on: ubuntu-latest
+    needs: setup
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: java
+    
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+        cache: 'maven'
+    
+    - name: Build with Maven
+      run: mvn clean package -DskipTests
+    
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+  
+  # ============================================
+  # Stage 4: Build & Package
+  # ============================================
+  build:
+    name: Build Application
+    runs-on: ubuntu-latest
+    needs: [setup, security-sca]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+        cache: 'maven'
+    
+    - name: Build JAR
+      run: mvn clean package -DskipTests
+    
+    - name: Upload JAR artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: application-jar
+        path: target/*.jar
+        retention-days: 30
+  
+  # ============================================
+  # Stage 5: Container Build & Security Scan
+  # ============================================
+  docker-build-scan:
+    name: Docker Build & Scan
+    runs-on: ubuntu-latest
+    needs: [build, security-sast]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Build Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: false
+        load: true
+        tags: |
+          ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+          ${{ env.DOCKER_IMAGE }}:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+    
+    - name: Run Trivy vulnerability scanner (Image)
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: '${{ env.DOCKER_IMAGE }}:${{ github.sha }}'
+        format: 'sarif'
+        output: 'trivy-image-results.sarif'
+        severity: 'CRITICAL,HIGH'
+        exit-code: '1'
+    
+    - name: Upload Trivy Image results to GitHub Security
+      if: always()
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: 'trivy-image-results.sarif'
+        category: 'trivy-image'
+    
+    - name: Save Docker image
+      run: |
+        docker save ${{ env.DOCKER_IMAGE }}:${{ github.sha }} | gzip > docker-image.tar.gz
+    
+    - name: Upload Docker image artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: docker-image
+        path: docker-image.tar.gz
+        retention-days: 7
+  
+  # ============================================
+  # Stage 6: Runtime Validation
+  # ============================================
+  smoke-test:
+    name: Smoke Test
+    runs-on: ubuntu-latest
+    needs: docker-build-scan
+    
+    steps:
+    - name: Download Docker image artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: docker-image
+    
+    - name: Load Docker image
+      run: |
+        docker load < docker-image.tar.gz
+        docker images
+    
+    - name: Run container
+      run: |
+        docker run -d -p 8080:8080 --name test-api ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+        
+    - name: Wait for application to start
+      run: |
+        timeout 60 bash -c 'until curl -f http://localhost:8080/users; do sleep 2; done'
+    
+    - name: Test /users endpoint
+      run: |
+        response=$(curl -s http://localhost:8080/users)
+        echo "Response: $response"
+        if [[ "$response" == *"John"* ]]; then
+          echo "✅ Smoke test passed!"
+        else
+          echo "❌ Smoke test failed!"
           exit 1
-        # Validate runtime behavior before publishing
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-        # Use GitHub secrets to avoid hardcoding credentials
-
-      - name: Push image to Docker Hub
-        run: |
-          docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
-          docker push ${{ env.IMAGE_NAME }}:latest
-        # Publish only after security and runtime gates pass
-
-      - name: Cleanup container
-        if: always()
-        run: docker rm -f app-under-test || true
-        # Ensure runner is clean for subsequent jobs
+        fi
+    
+    - name: Check container logs
+      if: always()
+      run: docker logs test-api
+    
+    - name: Stop container
+      if: always()
+      run: docker stop test-api
+  
+  # ============================================
+  # Stage 7: Publish to Registry
+  # ============================================
+  publish:
+    name: Publish to Docker Hub
+    runs-on: ubuntu-latest
+    needs: smoke-test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+    - name: Download Docker image artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: docker-image
+    
+    - name: Load Docker image
+      run: docker load < docker-image.tar.gz
+    
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    
+    - name: Push Docker image
+      run: |
+        docker push ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+        docker push ${{ env.DOCKER_IMAGE }}:latest
+        echo "✅ Image pushed: ${{ env.DOCKER_IMAGE }}:${{ github.sha }}"
+        echo "✅ Image pushed: ${{ env.DOCKER_IMAGE }}:latest"
+    
+    - name: Generate image metadata
+      id: meta
+      run: |
+        echo "IMAGE_TAG=${{ github.sha }}" >> $GITHUB_OUTPUT
+        echo "IMAGE_URL=${{ env.DOCKER_IMAGE }}:${{ github.sha }}" >> $GITHUB_OUTPUT
+    
+    - name: Create deployment artifact
+      run: |
+        echo "${{ steps.meta.outputs.IMAGE_TAG }}" > image-tag.txt
+        echo "${{ steps.meta.outputs.IMAGE_URL }}" > image-url.txt
+    
+    - name: Upload deployment artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: deployment-info
+        path: |
+          image-tag.txt
+          image-url.txt
+        retention-days: 90
+  
+  # ============================================
+  # Stage 8: Pipeline Summary
+  # ============================================
+  summary:
+    name: Pipeline Summary
+    runs-on: ubuntu-latest
+    needs: [publish]
+    if: always()
+    
+    steps:
+    - name: Pipeline Summary
+      run: |
+        echo "## 🚀 CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Build Information:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Commit SHA: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- Branch: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- Triggered by: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Docker Image:**" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ env.DOCKER_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ env.DOCKER_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Next Steps:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Image is ready for deployment to Kubernetes" >> $GITHUB_STEP_SUMMARY
+        echo "- Use CD pipeline to deploy to environments" >> $GITHUB_STEP_SUMMARY

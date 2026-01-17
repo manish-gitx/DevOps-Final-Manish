@@ -126,49 +126,146 @@ minikube stop
 
 ## 🔐 Secrets Configuration
 
-To run the CI/CD pipeline in GitHub Actions, configure the following repository secrets:
+To run the complete CI/CD pipeline, you need to configure secrets for both Docker Hub and Kubernetes.
 
-### Setting Up GitHub Secrets
+### Required Secrets for CI Pipeline
 
 1. **Go to your GitHub repository**
 2. **Navigate to**: Settings → Secrets and variables → Actions
 3. **Click**: "New repository secret"
 4. **Add the following secrets:**
 
-| Secret Name | Description | How to Get |
-|-------------|-------------|------------|
-| `DOCKERHUB_USERNAME` | Your Docker Hub username | Your Docker Hub account username |
-| `DOCKERHUB_TOKEN` | Docker Hub access token | Docker Hub → Account Settings → Security → New Access Token |
+| Secret Name | Description | Required For |
+|-------------|-------------|--------------|
+| `DOCKERHUB_USERNAME` | Your Docker Hub username | CI (Image push) |
+| `DOCKERHUB_TOKEN` | Docker Hub access token | CI (Image push) |
+
+### Required Secrets for CD Pipeline
+
+| Secret Name | Description | Required For |
+|-------------|-------------|--------------|
+| `KUBE_CONFIG_DEV` | Base64 encoded kubeconfig for dev cluster | Development deployment |
+| `KUBE_CONFIG_STAGING` | Base64 encoded kubeconfig for staging cluster | Staging deployment |
+| `KUBE_CONFIG_PROD` | Base64 encoded kubeconfig for production cluster | Production deployment |
 
 ### How to Create Docker Hub Access Token
 
 1. Log in to Docker Hub: https://hub.docker.com/
 2. Go to Account Settings → Security
 3. Click "New Access Token"
-4. Name: "GitHub Actions CI"
+4. Name: "GitHub Actions CI/CD"
 5. Permissions: Read, Write, Delete
 6. Copy the token (you won't see it again!)
 7. Add as `DOCKERHUB_TOKEN` in GitHub Secrets
 
-### Verifying Secrets
+### How to Create Kubernetes Secrets
 
-After configuring secrets, trigger the CI pipeline:
+**For local Kubernetes (minikube/kind) testing:**
+```bash
+# Get your kubeconfig
+cat ~/.kube/config | base64
+
+# Or for specific context
+kubectl config view --minify --flatten | base64
+```
+
+**For cloud providers (AWS EKS, GCP GKE, Azure AKS):**
+
+Choose your provider and follow the instructions:
+
+<details>
+<summary><b>AWS EKS</b></summary>
+
+```bash
+# Install AWS CLI and configure
+aws configure
+
+# Update kubeconfig for EKS
+aws eks update-kubeconfig --name your-cluster-name --region us-east-1
+
+# Export and encode
+kubectl config view --minify --flatten | base64 | tr -d '\n'
+```
+</details>
+
+<details>
+<summary><b>GCP GKE</b></summary>
+
+```bash
+# Install gcloud CLI and authenticate
+gcloud auth login
+
+# Get cluster credentials
+gcloud container clusters get-credentials your-cluster-name --region us-central1
+
+# Export and encode
+kubectl config view --minify --flatten | base64 | tr -d '\n'
+```
+</details>
+
+<details>
+<summary><b>Azure AKS</b></summary>
+
+```bash
+# Install Azure CLI and login
+az login
+
+# Get cluster credentials
+az aks get-credentials --resource-group your-rg --name your-cluster-name
+
+# Export and encode
+kubectl config view --minify --flatten | base64 | tr -d '\n'
+```
+</details>
+
+**Then add to GitHub Secrets:**
+- Copy the base64 encoded kubeconfig
+- Add as `KUBE_CONFIG_DEV`, `KUBE_CONFIG_STAGING`, or `KUBE_CONFIG_PROD`
+
+### Setting Up GitHub Environments (Optional but Recommended)
+
+For deployment approvals and protection rules:
+
+1. Go to: Settings → Environments
+2. Create three environments:
+   - `development` (no approval required)
+   - `staging` (require 1 reviewer)
+   - `production` (require 2 reviewers)
+3. Add environment-specific secrets if needed
+
+### Verifying Configuration
+
+**Test CI Pipeline:**
 ```bash
 git push origin main
 ```
 
+**Test CD Pipeline:**
+```bash
+# Via GitHub UI: Actions → CD - Deploy to Kubernetes → Run workflow
+# Select environment: development
+```
+
 Check the workflow logs to ensure:
-- "Log in to Docker Hub" step succeeds
-- "Push image to Docker Hub" step completes
-- Image appears in your Docker Hub repository
+- ✅ Docker Hub login succeeds
+- ✅ Image push completes
+- ✅ Kubernetes connection succeeds
+- ✅ Deployment completes
+- ✅ Health checks pass
 
 ---
 
 ## 🔄 CI/CD Pipeline Explanation
 
-The CI pipeline implements a **security-first, shift-left** approach with multiple quality gates.
+This project includes **complete CI/CD pipelines** with automated deployment to Kubernetes.
 
-### Pipeline Architecture
+### Available Workflows
+
+1. **CI Pipeline** (`.github/workflows/ci.yml`) - Automated on every push
+2. **CD Pipeline** (`.github/workflows/cd.yml`) - Deploy to Development/Staging/Production
+3. **Rollback** (`.github/workflows/rollback.yml`) - Emergency rollback capability
+
+### CI Pipeline Architecture
 
 ```
 Developer → Git Push → GitHub Actions
@@ -199,7 +296,35 @@ Stage 5: Runtime Validation (30-60s)
 Stage 6: Publish to Registry (30-90s)
     - Push to Docker Hub (SHA + latest tags)
     ↓
-Docker Hub Registry → Ready for Deployment
+Stage 7: Auto-Deploy to Development
+    - Triggers CD pipeline automatically
+    ↓
+Docker Hub Registry + Kubernetes Deployment
+```
+
+### CD Pipeline Architecture
+
+```
+CI Success → CD Pipeline Triggered
+    ↓
+Environment Selection
+    - Development (auto-deploy)
+    - Staging (manual approval)
+    - Production (manual approval)
+    ↓
+Deploy to Kubernetes
+    - Create/update namespace
+    - Apply ConfigMaps
+    - Deploy application
+    - Apply services
+    - Apply network policies
+    ↓
+Health Checks
+    - Wait for rollout
+    - Verify pods running
+    - Test endpoints
+    ↓
+Deployment Complete
 ```
 
 ### Pipeline Stages Breakdown
@@ -249,9 +374,20 @@ Docker Hub Registry → Ready for Deployment
 
 ```
 dev-Secops/
-├── .github/workflows/ci.yml    # CI/CD pipeline
+├── .github/
+│   └── workflows/
+│       ├── ci.yml              # CI pipeline (auto on push)
+│       ├── cd.yml              # CD pipeline (deploy to K8s)
+│       └── rollback.yml        # Rollback workflow
 ├── src/                        # Java Spring Boot source code
+│   ├── main/java/              # Application code
+│   └── test/java/              # Unit tests
 ├── k8s/                        # Kubernetes manifests
+│   ├── namespace.yaml          # Namespace definition
+│   ├── configmap.yaml          # Configuration
+│   ├── deployment.yaml         # Deployment spec
+│   ├── service.yaml            # Service definition
+│   └── networkpolicy.yaml      # Network policies
 ├── Dockerfile                  # Multi-stage container build
 ├── pom.xml                     # Maven dependencies
 ├── checkstyle.xml              # Code style rules
@@ -260,16 +396,59 @@ dev-Secops/
 
 ---
 
+## 🚢 CD Workflows
+
+### 1. Automated Deployment (Development)
+```bash
+# Automatically triggered on successful CI build from main branch
+git push origin main
+# → CI runs → Image published → Auto-deploys to dev
+```
+
+### 2. Manual Deployment (Staging/Production)
+```bash
+# Via GitHub UI:
+# 1. Go to Actions → "CD - Deploy to Kubernetes"
+# 2. Click "Run workflow"
+# 3. Select environment (staging/production)
+# 4. Select image tag (default: latest)
+# 5. Click "Run workflow"
+# 6. Approve deployment (for staging/production)
+```
+
+### 3. Rollback
+```bash
+# Via GitHub UI:
+# 1. Go to Actions → "Rollback Deployment"
+# 2. Click "Run workflow"
+# 3. Select environment
+# 4. Select revision (0 = previous, 1 = before that)
+# 5. Click "Run workflow"
+```
+
+### Deployment Environments
+
+| Environment | Auto-Deploy | Requires Approval | Replicas | Namespace |
+|-------------|-------------|-------------------|----------|-----------|
+| Development | ✅ Yes | ❌ No | 2 | devops-app-dev |
+| Staging | ❌ No | ✅ Yes (1 reviewer) | 2 | devops-app-staging |
+| Production | ❌ No | ✅ Yes (2 reviewers) | 3 | devops-app-prod |
+
+---
+
 ## 🎯 DevSecOps Principles Implemented
 
 1. **Shift-Left Security** - Security testing early in the pipeline
-2. **Automation** - Zero manual steps, fully automated
+2. **Automation** - Zero manual steps, fully automated CI/CD
 3. **Continuous Integration** - Every commit triggers full pipeline
-4. **Infrastructure as Code** - Version-controlled manifests
-5. **Immutable Artifacts** - Git SHA tagged images
-6. **Defense in Depth** - Multiple security layers
-7. **Fail-Fast** - Stop immediately on critical failures
-8. **Least Privilege** - Non-root containers, minimal permissions
+4. **Continuous Deployment** - Automated deployment to Kubernetes
+5. **Infrastructure as Code** - Version-controlled manifests
+6. **Immutable Artifacts** - Git SHA tagged images
+7. **Defense in Depth** - Multiple security layers
+8. **Fail-Fast** - Stop immediately on critical failures
+9. **Least Privilege** - Non-root containers, minimal permissions
+10. **Progressive Delivery** - Dev → Staging → Production with approvals
+11. **Rollback Strategy** - One-click rollback capability
 
 ---
 
