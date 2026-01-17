@@ -111,6 +111,9 @@ jobs:
         mkdir -p $HOME/.kube
         echo "${{ secrets.KUBE_CONFIG_DEV }}" | base64 -d > $HOME/.kube/config
         chmod 600 $HOME/.kube/config
+        
+        # Fix gke-gcloud-auth-plugin path for cross-platform compatibility
+        sed -i 's|/opt/homebrew/share/google-cloud-sdk/bin/gke-gcloud-auth-plugin|gke-gcloud-auth-plugin|g' $HOME/.kube/config
     
     - name: Verify cluster connection
       run: |
@@ -207,6 +210,9 @@ jobs:
         mkdir -p $HOME/.kube
         echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > $HOME/.kube/config
         chmod 600 $HOME/.kube/config
+        
+        # Fix gke-gcloud-auth-plugin path for cross-platform compatibility
+        sed -i 's|/opt/homebrew/share/google-cloud-sdk/bin/gke-gcloud-auth-plugin|gke-gcloud-auth-plugin|g' $HOME/.kube/config
     
     - name: Create namespace if not exists
       run: |
@@ -273,6 +279,9 @@ jobs:
         mkdir -p $HOME/.kube
         echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > $HOME/.kube/config
         chmod 600 $HOME/.kube/config
+        
+        # Fix gke-gcloud-auth-plugin path for cross-platform compatibility
+        sed -i 's|/opt/homebrew/share/google-cloud-sdk/bin/gke-gcloud-auth-plugin|gke-gcloud-auth-plugin|g' $HOME/.kube/config
     
     - name: Pre-deployment verification
       run: |

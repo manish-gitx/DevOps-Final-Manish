@@ -66,6 +66,9 @@ jobs:
         SECRET_NAME="${{ steps.set-namespace.outputs.kubeconfig_secret }}"
         echo "${{ secrets[env.SECRET_NAME] }}" | base64 -d > $HOME/.kube/config
         chmod 600 $HOME/.kube/config
+        
+        # Fix gke-gcloud-auth-plugin path for cross-platform compatibility
+        sed -i 's|/opt/homebrew/share/google-cloud-sdk/bin/gke-gcloud-auth-plugin|gke-gcloud-auth-plugin|g' $HOME/.kube/config
       env:
         SECRET_NAME: ${{ steps.set-namespace.outputs.kubeconfig_secret }}
     
