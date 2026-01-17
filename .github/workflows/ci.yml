@@ -235,7 +235,7 @@ jobs:
       run: |
         response=$(curl -s http://localhost:8080/users)
         echo "Response: $response"
-        if [[ "$response" == *"John"* ]]; then
+        if [[ "$response" == *"Alice"* ]]; then
           echo "✅ Smoke test passed!"
         else
           echo "❌ Smoke test failed!"
