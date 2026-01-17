@@ -132,7 +132,8 @@ jobs:
     - name: Deploy to Kubernetes
       run: |
         # Apply ConfigMap
-        kubectl apply -f k8s/configmap.yaml -n ${{ needs.prepare.outputs.namespace }}
+        sed "s|namespace: devops-app|namespace: ${{ needs.prepare.outputs.namespace }}|g" k8s/configmap.yaml | \
+          kubectl apply -f -
         
         # Update deployment with correct image
         sed "s|IMAGE_NAME:latest|${{ env.DOCKER_IMAGE }}:${{ needs.prepare.outputs.image_tag }}|g" k8s/deployment.yaml | \
@@ -230,7 +231,8 @@ jobs:
     
     - name: Deploy to Kubernetes
       run: |
-        kubectl apply -f k8s/configmap.yaml -n ${{ needs.prepare.outputs.namespace }}
+        sed "s|namespace: devops-app|namespace: ${{ needs.prepare.outputs.namespace }}|g" k8s/configmap.yaml | \
+          kubectl apply -f -
         
         sed "s|IMAGE_NAME:latest|${{ env.DOCKER_IMAGE }}:${{ needs.prepare.outputs.image_tag }}|g" k8s/deployment.yaml | \
           sed "s|namespace: devops-app|namespace: ${{ needs.prepare.outputs.namespace }}|g" | \
@@ -318,7 +320,8 @@ jobs:
     
     - name: Deploy to Production
       run: |
-        kubectl apply -f k8s/configmap.yaml -n ${{ needs.prepare.outputs.namespace }}
+        sed "s|namespace: devops-app|namespace: ${{ needs.prepare.outputs.namespace }}|g" k8s/configmap.yaml | \
+          kubectl apply -f -
         
         sed "s|IMAGE_NAME:latest|${{ env.DOCKER_IMAGE }}:${{ needs.prepare.outputs.image_tag }}|g" k8s/deployment.yaml | \
           sed "s|namespace: devops-app|namespace: ${{ needs.prepare.outputs.namespace }}|g" | \
